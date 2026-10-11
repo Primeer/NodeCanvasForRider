@@ -1,6 +1,4 @@
 import org.jetbrains.intellij.platform.gradle.Constants
-import groovy.ant.FileNameFinder
-import org.apache.tools.ant.taskdefs.condition.Os
 
 plugins {
     id("java")
@@ -8,9 +6,6 @@ plugins {
     id("org.jetbrains.intellij.platform") version "2.10.5"     // See https://github.com/JetBrains/intellij-platform-gradle-plugin/releases
     id("me.filippov.gradle.jvm.wrapper") version "0.15.0"
 }
-
-val isWindows = Os.isFamily(Os.FAMILY_WINDOWS)
-extra["isWindows"] = isWindows
 
 val DotnetSolution: String by project
 val BuildConfiguration: String by project
@@ -54,23 +49,9 @@ var buildToolArgs: List<String>? = null
 
 val setBuildTool by tasks.registering {
     doLast {
-        var executable = "dotnet"
-        var args = mutableListOf("msbuild")
-
-        if (isWindows) {
-            val execResult = providers.exec {
-                executable("${rootDir}\\tools\\vswhere.exe")
-                args("-latest", "-property", "installationPath", "-products", "*")
-                workingDir(rootDir)
-            }
-
-            val directory = execResult.standardOutput.asText.get().trim()
-            if (directory.isNotEmpty()) {
-                val files = FileNameFinder().getFileNames("${directory}\\MSBuild", "**/MSBuild.exe")
-                executable = files.get(0)
-                args = mutableListOf("/v:minimal")
-            }
-        }
+        // dotnet msbuild on every OS (the template's vswhere lookup for Visual Studio MSBuild is not needed)
+        val executable = "dotnet"
+        val args = mutableListOf("msbuild")
 
         args.add(DotnetSolution)
         args.add("/p:Configuration=${BuildConfiguration}")
