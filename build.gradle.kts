@@ -95,23 +95,6 @@ tasks.buildPlugin {
             from("${buildDir}/distributions/${rootProject.name}-${version}.zip")
             into("${rootDir}/output")
         }
-
-        val changelogText = file("${rootDir}/CHANGELOG.md").readText()
-        val changelogMatches = Regex("(?s)(-.+?)(?=##|$)").findAll(changelogText)
-        val changeNotes = changelogMatches.map {
-            it.groups[1]!!.value.replace("(?s)- ".toRegex(), "\u2022 ").replace("`", "").replace(",", "%2C").replace(";", "%3B")
-        }.take(1).joinToString()
-
-        val arguments = buildToolArgs!!.toMutableList()
-        arguments.add("/t:Pack")
-        arguments.add("/p:PackageOutputPath=${rootDir}/output")
-        arguments.add("/p:PackageReleaseNotes=${changeNotes}")
-        arguments.add("/p:PackageVersion=${version}")
-        providers.exec {
-            executable(buildToolExecutable!!)
-            args(arguments)
-            workingDir(rootDir)
-        }.result.get()
     }
 }
 
@@ -177,12 +160,4 @@ tasks.publishPlugin {
     dependsOn(testDotNet)
     dependsOn(tasks.buildPlugin)
     token.set("${PublishToken}")
-
-    doLast {
-        providers.exec {
-            executable("dotnet")
-            args("nuget","push","output/${DotnetPluginId}.${version}.nupkg","--api-key","${PublishToken}","--source","https://plugins.jetbrains.com")
-            workingDir(rootDir)
-        }.result.get()
-    }
 }

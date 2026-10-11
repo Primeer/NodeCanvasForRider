@@ -2,7 +2,7 @@
   <id>io.github.nodecanvasusages.rider</id>
   <name>NodeCanvas Usages</name>
   <version>_PLACEHOLDER_</version>
-  <vendor>NodeCanvas Usages contributors</vendor>
+  <vendor url="https://github.com/Primeer/NodeCanvasForRider">Primeer</vendor>
   <idea-version since-build="_PLACEHOLDER_" until-build="_PLACEHOLDER_" />
   <depends>com.intellij.modules.rider</depends>
 

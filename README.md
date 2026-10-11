@@ -1,4 +1,4 @@
-# NodeCanvas for Rider
+# NodeCanvas Usages for Rider
 
 A JetBrains Rider plugin that makes C# members used by [NodeCanvas](https://nodecanvas.paradoxnotion.com/) graphs
 (Behaviour Trees, FSMs, Dialogue Trees) visible to the IDE.
