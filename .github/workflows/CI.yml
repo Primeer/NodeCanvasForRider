@@ -1,0 +1,51 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  CoreTests:
+    # Format logic (YAML scalar codec, FullSerializer JSON, scanner, rewriter); no ReSharper SDK needed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - run: dotnet test src/dotnet/NodeCanvasUsages.Core.Tests --logger GitHubActions
+
+  Build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            build/gradle-jvm
+            ~/.nuget/packages
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-Build-${{ hashFiles('gradlew.bat', 'src/dotnet/*/*.csproj', 'src/dotnet/*.props', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties') }}
+      - run: ./gradlew :buildPlugin --no-daemon
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ github.event.repository.name }}.CI.${{ github.ref_name }}
+          path: output
+
+  Test:
+    # Integration tests on the ReSharper SDK test framework (net472)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            build/gradle-jvm
+            ~/.nuget/packages
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-Test-${{ hashFiles('gradlew.bat', 'src/dotnet/*/*.csproj', 'src/dotnet/*.props', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties') }}
+      - run: ./gradlew :testDotNet --no-daemon

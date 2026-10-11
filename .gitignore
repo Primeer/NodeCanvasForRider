@@ -1,0 +1,30 @@
+# Build artifacts
+/.intellijPlatform/
+[Bb]in/
+[Oo]bj/
+build
+output
+.gradle
+.tmp
+
+# User-specific files
+*.suo
+*.user
+*.sln.docstates
+*.cache
+
+# IDEs
+/.idea/*.iml
+/.idea/*.xml
+/.idea/.idea.*/*.iml
+/.idea/.idea.*/.idea/*.xml
+.vs
+_ReSharper*
+_dotTrace*
+
+# Unity editor output if testData/project is opened in Unity (open build/SampleUnityProject instead)
+/testData/project/Library/
+/testData/project/Logs/
+/testData/project/Temp/
+/testData/project/UserSettings/
+/testData/project/Packages/

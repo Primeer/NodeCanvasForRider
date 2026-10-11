@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>ReSharperPlugin.NodeCanvasUsages</AssemblyName>
+    <RootNamespace>$(AssemblyName)</RootNamespace>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <DefineConstants>$(DefineConstants);RIDER</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="JetBrains.Rider.SDK" Version="$(SdkVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Format logic is shared as source so the plugin ships as a single assembly -->
+    <Compile Include="..\NodeCanvasUsages.Core\**\*.cs" Exclude="..\NodeCanvasUsages.Core\obj\**;..\NodeCanvasUsages.Core\bin\**" LinkBase="Core" />
+  </ItemGroup>
+
+</Project>

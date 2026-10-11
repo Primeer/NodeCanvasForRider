@@ -1,0 +1,20 @@
+﻿<Project>
+
+  <PropertyGroup>
+    <!-- See https://www.nuget.org/packages/JetBrains.ReSharper.SDK -->
+    <!-- ONE PLACE TO UPDATE together with ProductVersion/SinceBuild/UntilBuild in gradle.properties -->
+    <SdkVersion>2025.3.4</SdkVersion>
+
+    <Title>NodeCanvasUsages</Title>
+    <Description>Shows, navigates and refactors usages of C# members in NodeCanvas graphs (Behaviour Trees, FSMs, Dialogue Trees).</Description>
+
+    <Authors>NodeCanvas Usages contributors</Authors>
+    <Copyright>Copyright $([System.DateTime]::Now.Year) Maintainers of NodeCanvasUsages</Copyright>
+    <PackageTags>rider plugin unity nodecanvas</PackageTags>
+
+    <PackageProjectUrl></PackageProjectUrl>
+    <PackageLicenseUrl></PackageLicenseUrl>
+    <PackageIconUrl></PackageIconUrl>
+  </PropertyGroup>
+
+</Project>

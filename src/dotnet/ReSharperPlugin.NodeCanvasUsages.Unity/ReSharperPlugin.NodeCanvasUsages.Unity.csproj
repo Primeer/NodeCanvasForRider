@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Optional integration with the Unity Support plugin ("Open in Unity").
+       Its zone marker requires the Unity plugin's zone, so without that plugin these components are never loaded. -->
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>ReSharperPlugin.NodeCanvasUsages.Unity</AssemblyName>
+    <RootNamespace>$(AssemblyName)</RootNamespace>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <DefineConstants>$(DefineConstants);RIDER</DefineConstants>
+    <!-- Passed by Gradle from the Rider distribution; defaults to a local Rider for plain `dotnet build` -->
+    <UnityPluginDotnetDir Condition="'$(UnityPluginDotnetDir)' == ''">/Applications/Rider.app/Contents/plugins/rider-unity/dotnet</UnityPluginDotnetDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="JetBrains.Rider.SDK" Version="$(SdkVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ReSharperPlugin.NodeCanvasUsages\ReSharperPlugin.NodeCanvasUsages.Rider.csproj" Private="false" />
+    <Reference Include="JetBrains.ReSharper.Plugins.Unity" HintPath="$(UnityPluginDotnetDir)/JetBrains.ReSharper.Plugins.Unity.dll" Private="false" />
+    <Reference Include="JetBrains.ReSharper.Plugins.Unity.Rider" HintPath="$(UnityPluginDotnetDir)/JetBrains.ReSharper.Plugins.Unity.Rider.dll" Private="false" />
+    <Reference Include="JetBrains.Unity.Model" HintPath="$(UnityPluginDotnetDir)/JetBrains.Unity.Model.dll" Private="false" />
+  </ItemGroup>
+
+</Project>
