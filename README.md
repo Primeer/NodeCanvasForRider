@@ -1,5 +1,7 @@
 # NodeCanvas Usages for Rider
 
+[![JetBrains Marketplace](https://img.shields.io/jetbrains/plugin/v/35036?label=JetBrains%20Marketplace)](https://plugins.jetbrains.com/plugin/35036-nodecanvas-usages)
+
 A JetBrains Rider plugin that makes C# members used by [NodeCanvas](https://nodecanvas.paradoxnotion.com/) graphs
 (Behaviour Trees, FSMs, Dialogue Trees) visible to the IDE.
 
@@ -50,8 +52,8 @@ Requires **Rider 2025.3** (builds 253.\*) with the bundled **Unity Support** plu
 - **From disk**: download `ReSharperPlugin.NodeCanvasUsages-<version>.zip` from the
   [releases](../../releases) (or build it, see below), then in Rider go to *Settings → Plugins → ⚙ → Install Plugin from
   Disk…*, pick the zip and restart Rider.
-- **From JetBrains Marketplace**: *Settings → Plugins → Marketplace*, search for **NodeCanvas Usages**, install and
-  restart. Available once the plugin is published.
+- **From [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/35036-nodecanvas-usages)**: *Settings → Plugins → Marketplace*, search for **NodeCanvas Usages**,
+  install and restart.
 
 Settings: *Settings → Languages & Frameworks → NodeCanvas Usages*. You can turn indexing on or off and choose whether bound graphs
 (prefabs and scenes) count in Code Vision and Find Usages. Rename and the unused-symbol analysis always take all
