@@ -108,7 +108,7 @@ dependencies {
             }
         }
         jetbrainsRuntime()
-
+        bundledPlugin("com.intellij.resharper.unity")
     }
 }
 
