@@ -5,6 +5,9 @@ on:
     tags:
       - '*.*.*'
 
+permissions:
+  contents: write
+
 jobs:
   Publish:
     runs-on: windows-latest
@@ -20,3 +23,11 @@ jobs:
         with:
           name: ${{ github.event.repository.name }}.${{ github.ref_name }}
           path: output
+      - name: GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          awk -v h="## $VERSION" '$0==h{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
+          gh release create "$VERSION" output/*.zip --title "$VERSION" --notes-file notes.md
