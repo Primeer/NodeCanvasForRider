@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using JetBrains.Application;
 using JetBrains.Application.Parts;
 using JetBrains.Application.Progress;
@@ -18,7 +19,6 @@ using JetBrains.ReSharper.Psi.Pointers;
 using JetBrains.ReSharper.Refactorings.Rename;
 using JetBrains.Util;
 using JetBrains.Util.Logging;
-using NodeCanvasUsages.Core.Json;
 using NodeCanvasUsages.Core.Model;
 using ReSharperPlugin.NodeCanvasUsages.Index;
 using ReSharperPlugin.NodeCanvasUsages.Search;
@@ -66,14 +66,20 @@ public class NodeCanvasAtomicRenameFactory : IAtomicRenameFactory
 /// Rewrites graph scalars through decode → replace → encode (Unity's folding), so the asset is byte-for-byte what
 /// Unity would write; each changed scalar becomes one text occurrence of the refactoring, narrowed to the part that
 /// differs. They are applied in the refactoring's transaction (one undo) and listed in its preview.
+/// <para>
+/// One refactoring may rename several elements whose references share a scalar (a hierarchy, overloads, a property
+/// with its field). Re-encoding a scalar changes its folding, so per-element edits of it would overlap; instead the
+/// renames of one refactoring share a <see cref="Batch"/> that composes their rewrites into one edit per scalar.
+/// ReSharper calls every <c>PrepareToRename</c> before the first <c>Rename</c>.
+/// </para>
 /// </summary>
 public class NodeCanvasAtomicRename : AtomicRenameBase
 {
     private static readonly ILogger ourLogger = Logger.GetLogger<NodeCanvasAtomicRename>();
+    private static readonly ConditionalWeakTable<IRenameRefactoring, Batch> ourBatches = new();
 
     private readonly ISolution mySolution;
     private readonly IDeclaredElementPointer<IDeclaredElement> myPointer;
-    private readonly List<GraphTextOccurrence> myOccurrences = new();
 
     public NodeCanvasAtomicRename(ISolution solution, IDeclaredElement declaredElement, string newName)
     {
@@ -97,60 +103,107 @@ public class NodeCanvasAtomicRename : AtomicRenameBase
     public override void PrepareToRename(IRenameRefactoring executer, IProgressIndicator pi,
                                          bool hasConflictsWithDeclarations, IRefactoringDriver driver)
     {
-        myOccurrences.Clear();
+        var batch = ourBatches.GetValue(executer, _ => new Batch());
+        if (batch.Applied)
+            batch.Reset(); // the refactoring runs again
+        batch.Plans.RemoveAll(p => p.Owner == this);
+
         var element = myPointer.FindDeclaredElement();
         if (element == null)
             return;
-
         var plan = CreatePlan(element);
         if (plan == null)
             return;
+        batch.Plans.Add(plan);
 
-        pi.Start(plan.Value.Files.Count);
-        foreach (var file in plan.Value.Files)
+        // only this plan's files change; recompute them with every plan of the refactoring that touches them
+        pi.Start(plan.Files.Count);
+        foreach (var file in plan.Files)
         {
             Interruption.Current.CheckAndThrow();
             using var _ = pi.CreateSubProgress(1);
-            var document = file.Document;
-            var text = document.GetText();
-            List<TextEdit> edits;
-            try
-            {
-                edits = GraphRewriter.ComputeJsonEdits(text, plan.Value.RewriteJson);
-            }
-            catch (FormatException e)
-            {
-                ourLogger.Warn(e, $"NodeCanvas rename: cannot rewrite {file.GetLocation()}");
-                continue;
-            }
-
-            foreach (var edit in edits)
-            {
-                var trimmed = edit.Trim(text);
-                myOccurrences.Add(new GraphTextOccurrence(mySolution, file, document,
-                    new TextRange(trimmed.Start, trimmed.End), text.Substring(trimmed.Start, trimmed.End - trimmed.Start),
-                    trimmed.NewText));
-            }
+            var rewrite = GraphRewriter.ComposeJson(batch.Plans.Where(p => p.Files.Contains(file)).Select(p => p.RewriteJson));
+            batch.Occurrences[file] = ComputeOccurrences(file, rewrite);
         }
 
         ourLogger.Verbose("NodeCanvas rename {0} -> {1}: {2} graph scalar(s) in {3} file(s)", OldName, NewName,
-            myOccurrences.Count, myOccurrences.Select(o => o.SourceFile).Distinct().Count());
+            plan.Files.Sum(f => batch.Occurrences[f].Count), plan.Files.Count(f => batch.Occurrences[f].Count > 0));
+    }
+
+    private List<GraphTextOccurrence> ComputeOccurrences(IPsiSourceFile file, Func<string, string?> rewrite)
+    {
+        var result = new List<GraphTextOccurrence>();
+        var document = file.Document;
+        var text = document.GetText();
+        List<TextEdit> edits;
+        try
+        {
+            edits = GraphRewriter.ComputeJsonEdits(text, rewrite);
+        }
+        catch (FormatException e)
+        {
+            ourLogger.Warn(e, $"NodeCanvas rename: cannot rewrite {file.GetLocation()}");
+            return result;
+        }
+
+        foreach (var edit in edits)
+        {
+            var trimmed = edit.Trim(text);
+            result.Add(new GraphTextOccurrence(mySolution, file, document, new TextRange(trimmed.Start, trimmed.End),
+                text.Substring(trimmed.Start, trimmed.End - trimmed.Start), trimmed.NewText));
+        }
+
+        return result;
     }
 
     public override void Rename(IRenameRefactoring executer, IProgressIndicator pi, bool hasConflictsWithDeclarations,
                                 IRefactoringDriver driver, PreviousAtomicRenames previousAtomicRenames)
     {
-        if (myOccurrences.Count == 0)
+        // the first rename of the refactoring adds the occurrences of all of them
+        if (!ourBatches.TryGetValue(executer, out var batch) || batch.Applied)
+            return;
+        batch.Applied = true;
+        var occurrences = batch.Occurrences.Values.SelectMany(o => o).ToList();
+        if (occurrences.Count == 0)
             return;
         var workflow = (executer.Workflow as RenameWorkflowBase).NotNull("workflow != null");
-        foreach (var occurrence in myOccurrences)
+        foreach (var occurrence in occurrences)
             workflow.DataModel.AddExtraTextOccurrence(occurrence);
 
         // code and graphs must reach Unity together (see GraphDocumentSaver)
         mySolution.GetComponent<GraphDocumentSaver>().RequestSaveAll("rename");
     }
 
-    private (IReadOnlyList<IPsiSourceFile> Files, Func<string, string?> RewriteJson)? CreatePlan(IDeclaredElement element)
+    private sealed class Plan
+    {
+        public Plan(NodeCanvasAtomicRename owner, IReadOnlyList<IPsiSourceFile> files, Func<string, string?> rewriteJson)
+        {
+            Owner = owner;
+            Files = new HashSet<IPsiSourceFile>(files);
+            RewriteJson = rewriteJson;
+        }
+
+        public NodeCanvasAtomicRename Owner { get; }
+        public HashSet<IPsiSourceFile> Files { get; }
+        public Func<string, string?> RewriteJson { get; }
+    }
+
+    /// <summary>The graph rewrites of all NodeCanvas renames of one refactoring.</summary>
+    private sealed class Batch
+    {
+        public List<Plan> Plans { get; } = new();
+        public Dictionary<IPsiSourceFile, List<GraphTextOccurrence>> Occurrences { get; } = new();
+        public bool Applied { get; set; }
+
+        public void Reset()
+        {
+            Plans.Clear();
+            Occurrences.Clear();
+            Applied = false;
+        }
+    }
+
+    private Plan? CreatePlan(IDeclaredElement element)
     {
         var cache = mySolution.GetComponent<NodeCanvasGraphCache>();
         switch (element)
@@ -159,14 +212,14 @@ public class NodeCanvasAtomicRename : AtomicRenameBase
             {
                 var oldName = type.GetClrName().FullName;
                 var newName = RenamedClrName(oldName, NewName);
-                return (FilesContaining(cache, oldName), WholeStrings(GraphRewriter.RenameType(oldName, newName)));
+                return new Plan(this, FilesContaining(cache, oldName), TypeNames(GraphRewriter.RenameType(oldName, newName)));
             }
             case INamespace ns:
             {
                 var oldName = ns.QualifiedName;
                 var dot = oldName.LastIndexOf('.');
                 var newName = dot < 0 ? NewName : oldName.Substring(0, dot + 1) + NewName;
-                return (FilesContaining(cache, oldName), WholeStrings(GraphRewriter.RenameNamespace(oldName, newName)));
+                return new Plan(this, FilesContaining(cache, oldName), TypeNames(GraphRewriter.RenameNamespace(oldName, newName)));
             }
             default:
             {
@@ -180,15 +233,16 @@ public class NodeCanvasAtomicRename : AtomicRenameBase
                 var targets = new HashSet<(string, string, string)>(usages.Select(u =>
                     (u.Usage.TypeName, u.Usage.MemberName, u.Usage.ParamsInfo ?? "")));
                 var newName = NewName;
-                return (usages.Select(u => u.SourceFile).Distinct().ToList(),
+                return new Plan(this, usages.Select(u => u.SourceFile).Distinct().ToList(),
                     json => GraphRewriter.RenameReferences(json,
                         r => targets.Contains((r.TypeName, r.MemberName, r.ParamsInfo ?? "")), newName));
             }
         }
     }
 
-    internal static Func<string, string?> WholeStrings(Func<string, string> rewrite) =>
-        json => FsJson.RewriteStrings(json, rewrite);
+    /// <summary>A JSON rewrite of the graphs' type names only (never node names, text or assembly names).</summary>
+    internal static Func<string, string?> TypeNames(Func<string, string> rewrite) =>
+        json => GraphRewriter.RewriteTypeNames(json, rewrite);
 
     internal static IReadOnlyList<IPsiSourceFile> FilesContaining(NodeCanvasGraphCache cache, string name) =>
         cache.GraphFiles().Where(f => f.Document.GetText().IndexOf(name, StringComparison.Ordinal) >= 0).ToList();
@@ -241,11 +295,8 @@ public sealed class GraphTextOccurrence : ITextOccurrenceRenameMarker
 
     public string NewName { get; set; }
 
-    public bool Included
-    {
-        get => true;
-        set { }
-    }
+    // unchecking the asset in the preview leaves it as it is
+    public bool Included { get; set; } = true;
 
     public string OldName { get; }
     public TextRange OldNameRange => myRangeMarker.Range;

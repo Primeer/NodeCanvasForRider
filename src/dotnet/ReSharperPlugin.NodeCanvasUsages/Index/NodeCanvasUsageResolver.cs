@@ -7,6 +7,7 @@ using JetBrains.Application.Parts;
 using JetBrains.ProjectModel;
 using JetBrains.ReSharper.Psi;
 using JetBrains.ReSharper.Psi.Caches;
+using JetBrains.ReSharper.Psi.Resolve;
 using NodeCanvasUsages.Core.Model;
 
 namespace ReSharperPlugin.NodeCanvasUsages.Index;
@@ -88,7 +89,7 @@ public class NodeCanvasUsageResolver
     public static ITypeMember? ResolveMember(ITypeElement type, GraphUsage usage)
     {
         var name = usage.PlainMemberName;
-        foreach (var t in SelfAndSuperTypes(type))
+        foreach (var (t, substitution) in SelfAndSuperTypes(type))
         {
             if (!t.HasMemberWithName(name, ignoreCase: false))
                 continue;
@@ -109,7 +110,7 @@ public class NodeCanvasUsageResolver
                     if (m is IProperty { Parameters.Count: 0 })
                         return m;
                 }
-                else if (m is IMethod method && ParametersMatch(method, usage.ParamsInfo))
+                else if (m is IMethod method && ParametersMatch(method, usage.ParamsInfo, substitution))
                 {
                     return m;
                 }
@@ -119,25 +120,37 @@ public class NodeCanvasUsageResolver
         return null;
     }
 
-    private static IEnumerable<ITypeElement> SelfAndSuperTypes(ITypeElement type)
+    /// <summary>
+    /// The type and its supertypes, each with the substitution of its type parameters as seen from
+    /// <paramref name="type"/>: reflection on <c>Bot : Singleton&lt;Bot&gt;</c> writes <c>Demo.Bot</c>, not <c>T</c>.
+    /// </summary>
+    private static IEnumerable<(ITypeElement Type, ISubstitution Substitution)> SelfAndSuperTypes(ITypeElement type)
     {
         var visited = new HashSet<ITypeElement>();
-        var queue = new Queue<ITypeElement>();
-        queue.Enqueue(type);
+        var queue = new Queue<(ITypeElement, ISubstitution)>();
+        queue.Enqueue((type, EmptySubstitution.INSTANCE));
         while (queue.Count > 0)
         {
-            var t = queue.Dequeue();
+            var (t, substitution) = queue.Dequeue();
             if (!visited.Add(t))
                 continue;
-            yield return t;
+            yield return (t, substitution);
             // base class first, so the nearest declaration wins as in Type.GetMethod
-            foreach (var super in t.GetSuperTypes().Select(s => s.GetTypeElement()).Where(s => s != null)
-                         .OrderBy(s => s is IInterface ? 1 : 0))
-                queue.Enqueue(super!);
+            var supers = new List<(ITypeElement, ISubstitution)>();
+            foreach (var super in t.GetSuperTypes())
+            {
+                var resolved = (substitution.Apply(super) as IDeclaredType ?? super).Resolve();
+                if (resolved.DeclaredElement is ITypeElement element)
+                    supers.Add((element, resolved.Substitution));
+            }
+
+            foreach (var super in supers.OrderBy(s => s.Item1 is IInterface ? 1 : 0))
+                queue.Enqueue(super);
         }
     }
 
-    public static bool ParametersMatch(IMethod method, string? paramsInfo)
+    /// <param name="substitution">Type arguments of the type the method is reached through (see <see cref="SelfAndSuperTypes"/>).</param>
+    public static bool ParametersMatch(IMethod method, string? paramsInfo, ISubstitution? substitution = null)
     {
         var expected = string.IsNullOrEmpty(paramsInfo) ? Array.Empty<string>() : paramsInfo!.Split('|');
         var parameters = method.Parameters;
@@ -145,7 +158,8 @@ public class NodeCanvasUsageResolver
             return false;
         for (var i = 0; i < expected.Length; i++)
         {
-            var actual = ClrName(parameters[i].Type);
+            var parameterType = parameters[i].Type;
+            var actual = ClrName(substitution?.Apply(parameterType) ?? parameterType);
             if (parameters[i].Kind is ParameterKind.REFERENCE or ParameterKind.OUTPUT or ParameterKind.READONLY_REFERENCE)
                 actual += "&";
             if (actual != StripAssemblies(expected[i]))

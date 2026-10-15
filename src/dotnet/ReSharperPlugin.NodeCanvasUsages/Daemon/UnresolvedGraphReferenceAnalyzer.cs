@@ -60,14 +60,21 @@ public class UnresolvedGraphReferenceAnalyzer : ElementProblemAnalyzer<IClassLik
         if (usages.Count == 0)
             return;
 
+        // a partial type: a group is reported once, on the part declaring the member of that name, else on the first part
+        var parts = type.GetDeclarations().OfType<IClassLikeDeclaration>().ToList();
+        var isFirstPart = parts.Count == 0 || Equals(parts[0], element);
+
         var broken = usages
             .Where(u => NodeCanvasUsageResolver.ResolveMember(type, u.Usage) == null)
             .GroupBy(u => (u.Usage.MemberName, u.Usage.ParamsInfo, u.Usage.Kind == UsageKind.Field));
         foreach (var group in broken)
         {
             var usage = group.First().Usage;
-            var sameName = element.MemberDeclarations
-                .FirstOrDefault(m => m.DeclaredElement?.ShortName == usage.PlainMemberName);
+            var reportingPart = parts.FirstOrDefault(p => SameName(p, usage) != null) ?? (isFirstPart ? element : null);
+            if (parts.Count > 1 && !Equals(reportingPart, element))
+                continue;
+            var sameName = SameName(element, usage);
+
             var signature = usage.Kind == UsageKind.Field || usage.IsPropertyAccessor
                 ? ""
                 : $"({string.Join(", ", (usage.ParamsInfo ?? "").Split('|').Where(p => p.Length > 0).Select(ShortName))})";
@@ -86,6 +93,9 @@ public class UnresolvedGraphReferenceAnalyzer : ElementProblemAnalyzer<IClassLik
             consumer.AddHighlighting(new UnresolvedGraphReferenceWarning(node, range, message));
         }
     }
+
+    private static ICSharpTypeMemberDeclaration? SameName(IClassLikeDeclaration part, GraphUsage usage) =>
+        part.MemberDeclarations.FirstOrDefault(m => m.DeclaredElement?.ShortName == usage.PlainMemberName);
 
     private static string ShortName(string clrName) => GraphScanner.ShortTypeName(clrName);
 }

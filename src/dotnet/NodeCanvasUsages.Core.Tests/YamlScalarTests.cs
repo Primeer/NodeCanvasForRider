@@ -46,8 +46,11 @@ public class YamlScalarTests
     [Test]
     public void DoesNotFoldBeforeSpaceOrAtEnds()
     {
+        // libyaml never breaks inside a run of spaces: a line ending in a space would lose it when read back
         var doubleSpace = new string('a', 74) + "  b";
-        Assert.That(YamlScalar.EncodeSingle("k", 2, doubleSpace)[0], Is.EqualTo("  k: '" + new string('a', 74) + " "));
+        Assert.That(YamlScalar.EncodeSingle("k", 2, doubleSpace), Is.EqualTo(new[] { "  k: '" + doubleSpace + "'" }));
+        var longRun = new string('a', 74) + "   " + new string('b', 10) + " c";
+        Assert.That(YamlScalar.EncodeSingle("k", 2, longRun), Is.EqualTo(new[] { "  k: '" + new string('a', 74) + "   " + new string('b', 10), "    c'" }));
         var trailing = new string('a', 74) + " ";
         Assert.That(YamlScalar.EncodeSingle("k", 2, trailing), Is.EqualTo(new[] { "  k: '" + trailing + "'" }));
     }
@@ -57,6 +60,10 @@ public class YamlScalarTests
     [TestCase("a\n\nb")]
     [TestCase("ends with break\n")]
     [TestCase("trailing spaces kept   ")]
+    [TestCase("two  spaces at the fold column: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  b")]
+    [TestCase("a\n")]
+    [TestCase("\na")]
+    [TestCase("a \n b")]
     [TestCase("")]
     public void RoundTripsSpecialValues(string value)
     {
@@ -67,11 +74,47 @@ public class YamlScalarTests
     }
 
     [Test]
-    public void ContinuationLinesKeepTrailingSpaces()
+    public void TrailingBlanksBeforeAFoldAreDropped()
     {
-        var lines = new[] { "  k: 'one", "    two  ", "    three'" };
-        Assert.That(YamlScalar.Find(lines, "k")!.Value, Is.EqualTo("one two   three"));
+        // YAML (and Unity's parser) drops blanks around a line fold; blanks before the closing quote are content
+        var lines = new[] { "  k: 'one ", "    two  ", "    three  '" };
+        Assert.That(YamlScalar.Find(lines, "k")!.Value, Is.EqualTo("one two three  "));
     }
+
+    [TestCase(new[] { "  k: 'a", "", "    '" }, "a\n")]
+    [TestCase(new[] { "  k: 'a", "    '" }, "a ")]
+    [TestCase(new[] { "  k: 'a", "", "", "    '" }, "a\n\n")]
+    [TestCase(new[] { "  k: '", "    a'" }, " a")]
+    public void SingleQuotedFoldingAtTheClosingQuote(string[] lines, string expected) =>
+        Assert.That(YamlScalar.Find(lines, "k")!.Value, Is.EqualTo(expected));
+
+    [Test]
+    public void ValueEndingInBreakStaysSingleQuoted()
+    {
+        var lines = YamlScalar.Encode("k", 2, "a\n");
+        Assert.That(lines, Is.EqualTo(new[] { "  k: 'a", "", "    '" }));
+    }
+
+    [TestCase("  k: \"a\\eb\\_c\\N\"", "a\u001bb\u00a0c\u0085")]
+    [TestCase("  k: \"\\a\\v\\0\\L\\P\\/\\ \"", "\a\v\0\u2028\u2029/ ")]
+    [TestCase("  k: \"\\x41\\u0042\\U0001F600\"", "AB\U0001F600")]
+    public void DoubleQuotedEscapes(string line, string expected) =>
+        Assert.That(YamlScalar.Find(new[] { line }, "k")!.Value, Is.EqualTo(expected));
+
+    [TestCase(new[] { "  k: \"a", "", "    b\"" }, "a\nb")]
+    [TestCase(new[] { "  k: \"a  ", "    b\"" }, "a b")]
+    [TestCase(new[] { "  k: \"a\\", "    b\"" }, "ab")]
+    [TestCase(new[] { "  k: \"a\\\\", "    b\"" }, "a\\ b")]
+    [TestCase(new[] { "  k: \"a\\ ", "    b\"" }, "a  b")]
+    public void DoubleQuotedFolding(string[] lines, string expected) =>
+        Assert.That(YamlScalar.Find(lines, "k")!.Value, Is.EqualTo(expected));
+
+    [TestCase("  k: \"\\u12\"")]
+    [TestCase("  k: \"\\x4\"")]
+    [TestCase("  k: \"\\uZZZZ\"")]
+    [TestCase("  k: \"\\q\"")]
+    public void MalformedDoubleQuotedEscapeIsAFormatError(string line) =>
+        Assert.That(() => YamlScalar.Find(new[] { line }, "k"), Throws.TypeOf<System.FormatException>());
 
     [Test]
     public void EscapedQuoteIsDecoded()

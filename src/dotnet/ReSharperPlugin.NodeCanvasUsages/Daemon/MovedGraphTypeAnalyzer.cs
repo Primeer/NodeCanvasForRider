@@ -125,7 +125,7 @@ public class UpdateMovedGraphTypeFix : QuickFixBase
                                                                         IProgressIndicator progress)
     {
         var cache = solution.GetComponent<NodeCanvasGraphCache>();
-        var rewrite = NodeCanvasAtomicRename.WholeStrings(GraphRewriter.RenameType(myWarning.OldName, myWarning.NewName));
+        var rewrite = NodeCanvasAtomicRename.TypeNames(GraphRewriter.RenameType(myWarning.OldName, myWarning.NewName));
         var changed = 0;
         foreach (var file in NodeCanvasAtomicRename.FilesContaining(cache, myWarning.OldName))
         {

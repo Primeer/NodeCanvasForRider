@@ -68,8 +68,8 @@ public class RenameReferencesTests
         foreach (var rel in TestData.UnityFiles(TestData.Project))
         {
             var text = TestData.Read(Path.Combine(TestData.Project, rel));
-            var byNamespace = GraphRewriter.Rewrite(text, GraphRewriter.RenameNamespace("Demo.Game", "Demo.Bots"));
-            var byTypes = GraphRewriter.Rewrite(text, GraphRewriter.Chain(new[] { "Bot", "Unit", "Pawn", "Relation", "HealAction", "Teleport" }
+            var byNamespace = GraphRewriter.RewriteTypes(text, GraphRewriter.RenameNamespace("Demo.Game", "Demo.Bots"));
+            var byTypes = GraphRewriter.RewriteTypes(text, GraphRewriter.Chain(new[] { "Bot", "Unit", "Pawn", "Relation", "HealAction", "Teleport" }
                 .Select(t => GraphRewriter.RenameType("Demo.Game." + t, "Demo.Bots." + t))));
             Assert.That(byNamespace, Is.EqualTo(byTypes), rel);
         }

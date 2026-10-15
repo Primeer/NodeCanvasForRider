@@ -84,6 +84,8 @@ public static class FsJson
                 case '\t': sb.Append("\\t"); break;
                 case '\b': sb.Append("\\b"); break;
                 case '\f': sb.Append("\\f"); break;
+                case '\a': sb.Append("\\a"); break;
+                case '\0': sb.Append("\\0"); break;
                 default:
                     if (ch < 0x20)
                         sb.Append("\\u").Append(((int)ch).ToString("x4", CultureInfo.InvariantCulture));
@@ -286,6 +288,9 @@ public static class FsJson
                     case 'n': sb.Append('\n'); break;
                     case 'r': sb.Append('\r'); break;
                     case 't': sb.Append('\t'); break;
+                    // fsJsonPrinter.EscapeString writes these two as well
+                    case 'a': sb.Append('\a'); break;
+                    case '0': sb.Append('\0'); break;
                     case 'u':
                         if (Position + 4 > myText.Length)
                             throw Error("bad unicode escape");

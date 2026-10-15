@@ -9,7 +9,7 @@ namespace ReSharperPlugin.NodeCanvasUsages.Index;
 public sealed class NodeCanvasFileData
 {
     // bump when the stored layout or the scanner's output changes
-    public const int FormatVersion = 5;
+    public const int FormatVersion = 6;
 
     /// <summary>Not a graph container.</summary>
     public static readonly NodeCanvasFileData Empty = new(new List<GraphUsage>(), new List<string>(), isGraphFile: false);

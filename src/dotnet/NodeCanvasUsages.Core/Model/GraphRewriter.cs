@@ -58,8 +58,8 @@ public readonly struct TextEdit
 }
 
 /// <summary>
-/// Project-wide renames inside serialized graphs. Every string value of the graph JSON is rewritten, including JSON
-/// nested in <c>_recoveryState</c>; the YAML scalar is re-encoded with Unity's folding so the file matches what Unity
+/// Project-wide renames inside serialized graphs: member references (<see cref="RenameReferences"/>) and type names
+/// (<see cref="RewriteTypeNames"/>), including JSON nested in <c>_recoveryState</c>; the YAML scalar is re-encoded with Unity's folding so the file matches what Unity
 /// itself would write.
 /// </summary>
 public static class GraphRewriter
@@ -86,26 +86,15 @@ public static class GraphRewriter
 
     /// <summary>
     /// Rewrites the full type name <paramref name="oldName"/> to <paramref name="newName"/> wherever it occurs as a
-    /// whole name (also as the outer part of nested names and inside generic arguments). When
-    /// <paramref name="assembly"/> is given, assembly-qualified references of the new name get that assembly.
+    /// whole name (also as the outer part of nested names and inside generic arguments). Meant for type names only
+    /// (see <see cref="RewriteTypeNames"/>): in free text a namespace-less name matches any word.
     /// </summary>
-    public static Func<string, string> RenameType(string oldName, string newName, string? assembly = null)
+    public static Func<string, string> RenameType(string oldName, string newName)
     {
-        if (oldName == newName && assembly == null)
+        if (oldName == newName)
             return s => s;
         var pattern = new Regex($"(?<!{TypeNameChars}){Regex.Escape(oldName)}(?![\\w`.])", RegexOptions.CultureInvariant);
-        var asmPattern = new Regex(
-            $"(?<!{TypeNameChars}){Regex.Escape(newName)}((?:\\+[\\w`]+)*), ([\\w.\\-]+), Version=",
-            RegexOptions.CultureInvariant);
-        return s =>
-        {
-            if (s.IndexOf(oldName, StringComparison.Ordinal) < 0)
-                return s;
-            var result = pattern.Replace(s, newName);
-            if (result != s && assembly != null)
-                result = asmPattern.Replace(result, m => $"{newName}{m.Groups[1].Value}, {assembly}, Version=");
-            return result;
-        };
+        return s => s.IndexOf(oldName, StringComparison.Ordinal) < 0 ? s : pattern.Replace(s, newName);
     }
 
     /// <summary>
@@ -188,6 +177,79 @@ public static class GraphRewriter
         }
     }
 
+    /// <summary>
+    /// Applies <paramref name="rewrite"/> to the type names of the graph JSON only (values of type keys, see
+    /// <see cref="GraphScanner.TypeNameRanges"/>, including JSON nested in <c>_recoveryState</c>); member names,
+    /// assembly names, node names, dialogue text and variable names stay as they are. Returns the new JSON or
+    /// <c>null</c> when nothing changes.
+    /// </summary>
+    public static string? RewriteTypeNames(string json, Func<string, string> rewrite)
+    {
+        var edits = new List<TextEdit>();
+        CollectTypeNameEdits(FsJson.Parse(json), rewrite, edits);
+        return edits.Count == 0 ? null : Apply(json, edits);
+    }
+
+    private static void CollectTypeNameEdits(JsonNode node, Func<string, string> rewrite, List<TextEdit> edits)
+    {
+        switch (node)
+        {
+            case JsonArray array:
+                foreach (var item in array.Items)
+                    CollectTypeNameEdits(item, rewrite, edits);
+                break;
+            case JsonObject obj:
+                foreach (var m in obj.Members)
+                {
+                    if (m.Value is not JsonString value)
+                    {
+                        CollectTypeNameEdits(m.Value, rewrite, edits);
+                    }
+                    else if (m.Key == "_recoveryState")
+                    {
+                        if (value.Value.IndexOf('{') < 0)
+                            continue;
+                        string? inner = null;
+                        try
+                        {
+                            inner = RewriteTypeNames(value.Value, rewrite);
+                        }
+                        catch (FormatException)
+                        {
+                            // leave a damaged recovery state as it is
+                        }
+
+                        if (inner != null)
+                            edits.Add(new TextEdit(value.Start, value.End, FsJson.Quote(inner)));
+                    }
+                    else if (GraphScanner.IsTypeKey(m.Key))
+                    {
+                        var text = value.Value;
+                        var sb = new StringBuilder(text.Length);
+                        var pos = 0;
+                        foreach (var (start, length) in GraphScanner.TypeNameRanges(m.Key, text))
+                        {
+                            sb.Append(text, pos, start - pos).Append(rewrite(text.Substring(start, length)));
+                            pos = start + length;
+                        }
+
+                        var changed = sb.Append(text, pos, text.Length - pos).ToString();
+                        if (changed != text)
+                            edits.Add(new TextEdit(value.Start, value.End, FsJson.Quote(changed)));
+                    }
+                }
+
+                break;
+        }
+    }
+
+    /// <summary>The file with <see cref="RewriteTypeNames"/> applied to every graph, or <c>null</c> when nothing changed.</summary>
+    public static string? RewriteTypes(string text, Func<string, string> rewrite)
+    {
+        var edits = ComputeJsonEdits(text, json => RewriteTypeNames(json, rewrite));
+        return edits.Count == 0 ? null : Apply(text, edits);
+    }
+
     /// <summary>Edits for a JSON-level rewrite (<paramref name="rewriteJson"/> returns <c>null</c> when nothing changes).</summary>
     public static List<TextEdit> ComputeJsonEdits(string text, Func<string, string?> rewriteJson,
                                                   Func<GraphSlot, bool>? slotFilter = null)
@@ -207,6 +269,22 @@ public static class GraphRewriter
         }
 
         return edits;
+    }
+
+    /// <summary>
+    /// Composes JSON-level rewrites (applied left to right; <c>null</c> means unchanged) into one, so that several
+    /// renames touching the same graph scalar produce one edit of it instead of overlapping ones.
+    /// </summary>
+    public static Func<string, string?> ComposeJson(IEnumerable<Func<string, string?>> rewrites)
+    {
+        var list = rewrites.ToList();
+        return json =>
+        {
+            var current = json;
+            foreach (var rewrite in list)
+                current = rewrite(current) ?? current;
+            return current == json ? null : current;
+        };
     }
 
     /// <summary>Composes several rewrites (applied left to right).</summary>

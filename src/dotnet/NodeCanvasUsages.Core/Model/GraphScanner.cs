@@ -44,9 +44,72 @@ public static class GraphScanner
         return result;
     }
 
-    /// <summary>Keys whose string values hold CLR type names (as FullSerializer and NodeCanvas write them).</summary>
+    /// <summary>
+    /// Keys whose string values hold CLR type names (as FullSerializer and NodeCanvas write them);
+    /// <c>_propertyPath</c> of a bound variable is <c>Type.member</c>.
+    /// </summary>
     private static readonly HashSet<string> ourTypeKeys = new(StringComparer.Ordinal)
-        { "$type", "_type", "_missingType", Marker, "_paramsInfo" };
+        { "$type", "_type", "_missingType", Marker, "_paramsInfo", PropertyPathKey };
+
+    private const string PropertyPathKey = "_propertyPath";
+
+    /// <summary>
+    /// <c>, Asm, Version=…, Culture=…, PublicKeyToken=…</c> (or just <c>, Asm</c>) after a type name, up to the closing
+    /// bracket of a generic argument or the next <c>|</c>: type names themselves never contain <c>", "</c>.
+    /// </summary>
+    private static readonly Regex ourAssemblyQualifier =
+        new(@", [^\[\]|]*", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    public static bool IsTypeKey(string key) => ourTypeKeys.Contains(key);
+
+    /// <summary>
+    /// The ranges <c>(Start, Length)</c> of <paramref name="value"/> (a string under a <see cref="IsTypeKey">type
+    /// key</see>) that hold type names: without assembly qualifiers, the member part of <c>_baseInfo</c> and the
+    /// member of <c>_propertyPath</c>.
+    /// </summary>
+    public static List<(int Start, int Length)> TypeNameRanges(string key, string value)
+    {
+        var parts = new List<(int Start, int Length)>();
+        if (key == Marker)
+        {
+            // Type|member|ReturnType
+            var start = 0;
+            for (var index = 0; start <= value.Length; index++)
+            {
+                var bar = value.IndexOf('|', start);
+                var end = bar < 0 ? value.Length : bar;
+                if (index != 1)
+                    parts.Add((start, end - start));
+                start = end + 1;
+            }
+        }
+        else if (key == PropertyPathKey)
+        {
+            var dot = value.LastIndexOf('.');
+            if (dot > 0)
+                parts.Add((0, dot));
+        }
+        else
+        {
+            parts.Add((0, value.Length));
+        }
+
+        var result = new List<(int Start, int Length)>();
+        foreach (var (start, length) in parts)
+        {
+            var pos = start;
+            foreach (Match m in ourAssemblyQualifier.Matches(value.Substring(start, length)))
+            {
+                result.Add((pos, start + m.Index - pos));
+                pos = start + m.Index + m.Length;
+            }
+
+            result.Add((pos, start + length - pos));
+        }
+
+        result.RemoveAll(r => r.Length == 0);
+        return result;
+    }
 
     private static readonly char[] ourTypeSeparators = { '[', ']', ',', '|', '&', '*', ' ', '\t' };
 
@@ -107,20 +170,14 @@ public static class GraphScanner
                     }
                     else if (ourTypeKeys.Contains(m.Key))
                     {
-                        var text = value.Value;
-                        if (m.Key == Marker)
+                        foreach (var (start, length) in TypeNameRanges(m.Key, value.Value))
                         {
-                            // Type|member|ReturnType: the member name is not a type
-                            var parts = text.Split('|');
-                            if (parts.Length >= 2)
-                                parts[1] = "";
-                            text = string.Join("|", parts);
-                        }
-
-                        foreach (var token in text.Split(ourTypeSeparators, StringSplitOptions.RemoveEmptyEntries))
-                        {
-                            if (ourTypeToken.IsMatch(token))
-                                result.Add(token);
+                            foreach (var token in value.Value.Substring(start, length)
+                                         .Split(ourTypeSeparators, StringSplitOptions.RemoveEmptyEntries))
+                            {
+                                if (ourTypeToken.IsMatch(token))
+                                    result.Add(token);
+                            }
                         }
                     }
                 }

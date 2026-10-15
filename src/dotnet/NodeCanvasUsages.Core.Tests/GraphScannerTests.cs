@@ -144,6 +144,28 @@ public class GraphScannerTests
     }
 
     [Test]
+    public void AssemblyNamesAreNotTypeNames()
+    {
+        var json = "{\"$type\":\"NodeCanvas.Framework.Variable`1[[Company.Game.Bot, Company.Game, Version=0.0.0.0, " +
+                   "Culture=neutral, PublicKeyToken=null]]\",\"_type\":\"UnityEngine.Vector3, UnityEngine.CoreModule\"," +
+                   "\"_propertyPath\":\"Company.Game.Bot.health\"}";
+        var text = "%YAML 1.1\n--- !u!114 &1\nMonoBehaviour:\n  _serializedGraph: '" + json + "'\n";
+        Assert.That(GraphScanner.ScanTypeNames(text, "a.asset", e => Assert.Fail(e.Message)), Is.EqualTo(new[]
+        {
+            "Company.Game.Bot", "NodeCanvas.Framework.Variable`1", "UnityEngine.Vector3",
+        }));
+    }
+
+    [Test]
+    public void FsJsonAcceptsFullSerializerEscapes()
+    {
+        // fsJsonPrinter.EscapeString writes \a and \0
+        var node = (Json.JsonObject)Json.FsJson.Parse("{\"_name\":\"a\\ab\\0c\"}");
+        Assert.That(node.GetString("_name"), Is.EqualTo("a\ab\0c"));
+        Assert.That(Json.FsJson.Quote("a\ab\0c"), Is.EqualTo("\"a\\ab\\0c\""));
+    }
+
+    [Test]
     public void ClrShortName()
     {
         Assert.That(GraphScanner.ClrShortName("Demo.Game.Bot+Sensor"), Is.EqualTo("Sensor"));

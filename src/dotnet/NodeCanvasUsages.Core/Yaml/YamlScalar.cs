@@ -123,18 +123,16 @@ public static class YamlScalar
             var from = j == i ? bodyStart : CountLeadingSpaces(line);
             var lineOffset = lineOffsets?[j] ?? 0;
             var close = ClosingQuote(line, from);
-            var to = close ?? line.Length;
+            var to = close ?? TrimEndSpaces(line, from);
 
             if (first)
             {
                 first = false;
             }
-            else if (to == from)
+            else if (to == from && close == null)
             {
-                // an empty continuation line is a line break; flushed before the next text
+                // an empty continuation line is a line break; flushed before the next text (or the closing quote)
                 pendingBreaks++;
-                if (close != null)
-                    break;
                 j = NextLine(lines, key, j);
                 continue;
             }
@@ -167,13 +165,16 @@ public static class YamlScalar
             j = NextLine(lines, key, j);
         }
 
-        for (var b = 0; b < pendingBreaks; b++)
-        {
-            sb.Append('\n');
-            map.Add(map.Count > 0 ? map[map.Count - 1] : 0);
-        }
-
         return new ScalarSpan(key, indent, i, j + 1, sb.ToString(), ScalarStyle.SingleQuoted, map.ToArray());
+    }
+
+    /// <summary>End of <paramref name="line"/> without trailing blanks, which YAML drops before a line fold.</summary>
+    private static int TrimEndSpaces(string line, int from)
+    {
+        var to = line.Length;
+        while (to > from && (line[to - 1] == ' ' || line[to - 1] == '\t'))
+            to--;
+        return to;
     }
 
     private static int NextLine(IReadOnlyList<string> lines, string key, int j)
@@ -223,23 +224,39 @@ public static class YamlScalar
                 throw new FormatException($"unterminated double-quoted scalar for '{key}'");
         }
 
+        // YAML flow folding: a single line break is a space, n empty lines are n breaks, and an escaped line end
+        // ("\" before it) is dropped (empty lines after it still count); blanks around a fold are not content
         var joined = new StringBuilder();
+        var pendingBreaks = 0;
+        var escapedBreak = false;
         for (var k = 0; k < raw.Count; k++)
         {
             var part = raw[k];
+            var last = k == raw.Count - 1;
+            if (!last)
+                part = TrimEndUnescaped(part);
             if (k == 0)
             {
                 joined.Append(part);
             }
-            else if (EndsWithSingleBackslash(joined))
+            else if (part.Length == 0 && !last)
             {
-                joined.Length--;
+                pendingBreaks++;
+                continue;
+            }
+            else
+            {
+                if (pendingBreaks > 0)
+                    joined.Append('\n', pendingBreaks);
+                else if (!escapedBreak)
+                    joined.Append(' ');
                 joined.Append(part);
             }
-            else if (part.Length > 0 || k < raw.Count - 1)
-            {
-                joined.Append(part.Length == 0 ? "\n" : " " + part);
-            }
+
+            pendingBreaks = 0;
+            escapedBreak = !last && EndsWithEscape(joined);
+            if (escapedBreak)
+                joined.Length--;
         }
 
         var value = Unescape(joined.ToString());
@@ -247,8 +264,31 @@ public static class YamlScalar
         return new ScalarSpan(key, indent, i, j + 1, value, ScalarStyle.DoubleQuoted, Uniform(value.Length, offset));
     }
 
-    private static bool EndsWithSingleBackslash(StringBuilder sb) =>
-        sb.Length > 0 && sb[sb.Length - 1] == '\\' && !(sb.Length > 1 && sb[sb.Length - 2] == '\\');
+    /// <summary>An odd number of trailing backslashes: the last one escapes the line break.</summary>
+    private static bool EndsWithEscape(StringBuilder sb)
+    {
+        var n = 0;
+        while (n < sb.Length && sb[sb.Length - 1 - n] == '\\')
+            n++;
+        return n % 2 == 1;
+    }
+
+    /// <summary>Drops trailing blanks unless the last one is escaped (<c>\ </c>, <c>\t</c> as a raw tab).</summary>
+    private static string TrimEndUnescaped(string s)
+    {
+        var to = s.Length;
+        while (to > 0 && (s[to - 1] == ' ' || s[to - 1] == '\t'))
+        {
+            var backslashes = 0;
+            while (to - 2 - backslashes >= 0 && s[to - 2 - backslashes] == '\\')
+                backslashes++;
+            if (backslashes % 2 == 1)
+                break;
+            to--;
+        }
+
+        return s.Substring(0, to);
+    }
 
     private static int? ClosingDouble(string text)
     {
@@ -267,42 +307,84 @@ public static class YamlScalar
         return null;
     }
 
+    /// <summary>YAML 1.1 double-quoted escapes; a malformed escape is a <see cref="FormatException"/>.</summary>
     private static string Unescape(string s)
     {
         var sb = new StringBuilder(s.Length);
         for (var k = 0; k < s.Length; k++)
         {
             var ch = s[k];
-            if (ch != '\\' || k + 1 >= s.Length)
+            if (ch != '\\')
             {
                 sb.Append(ch);
                 continue;
             }
 
+            if (k + 1 >= s.Length)
+                throw new FormatException("dangling escape in double-quoted scalar");
             var next = s[k + 1];
             switch (next)
             {
-                case 'u':
-                    sb.Append((char)Convert.ToInt32(s.Substring(k + 2, 4), 16));
-                    k += 5;
-                    continue;
                 case 'x':
-                    sb.Append((char)Convert.ToInt32(s.Substring(k + 2, 2), 16));
+                    sb.Append((char)Hex(s, k + 2, 2));
                     k += 3;
                     continue;
-                case 'n': sb.Append('\n'); break;
-                case 'r': sb.Append('\r'); break;
-                case 't': sb.Append('\t'); break;
+                case 'u':
+                    sb.Append((char)Hex(s, k + 2, 4));
+                    k += 5;
+                    continue;
+                case 'U':
+                    var code = Hex(s, k + 2, 8);
+                    if (code > 0x10FFFF || code is >= 0xD800 and <= 0xDFFF)
+                        throw new FormatException($"bad escape \\U{s.Substring(k + 2, 8)}");
+                    sb.Append(char.ConvertFromUtf32(code));
+                    k += 9;
+                    continue;
                 case '0': sb.Append('\0'); break;
+                case 'a': sb.Append('\a'); break;
                 case 'b': sb.Append('\b'); break;
+                case 't':
+                case '\t': sb.Append('\t'); break;
+                case 'n': sb.Append('\n'); break;
+                case 'v': sb.Append('\v'); break;
                 case 'f': sb.Append('\f'); break;
-                default: sb.Append(next); break;
+                case 'r': sb.Append('\r'); break;
+                case 'e': sb.Append('\u001b'); break;
+                case ' ': sb.Append(' '); break;
+                case '"': sb.Append('"'); break;
+                case '/': sb.Append('/'); break;
+                case '\\': sb.Append('\\'); break;
+                case 'N': sb.Append('\u0085'); break;
+                case '_': sb.Append('\u00a0'); break;
+                case 'L': sb.Append('\u2028'); break;
+                case 'P': sb.Append('\u2029'); break;
+                default: throw new FormatException($"bad escape \\{next} in double-quoted scalar");
             }
 
             k++;
         }
 
         return sb.ToString();
+    }
+
+    private static int Hex(string s, int start, int length)
+    {
+        if (start + length > s.Length)
+            throw new FormatException("truncated escape in double-quoted scalar");
+        var value = 0;
+        for (var k = start; k < start + length; k++)
+        {
+            var digit = s[k] switch
+            {
+                >= '0' and <= '9' => s[k] - '0',
+                >= 'a' and <= 'f' => s[k] - 'a' + 10,
+                >= 'A' and <= 'F' => s[k] - 'A' + 10,
+                _ => throw new FormatException($"bad hex digit '{s[k]}' in double-quoted scalar"),
+            };
+            value = value * 16 + digit;
+        }
+
+        return value;
     }
 
     private static string Fold(List<string> raw)
@@ -381,7 +463,7 @@ public static class YamlScalar
             var ch = value[k];
             if (ch == ' ')
             {
-                if (column >= BestWidth && k != 0 && k != n - 1 && value[k + 1] != ' ')
+                if (column >= BestWidth && k != 0 && k != n - 1 && value[k + 1] != ' ' && value[k - 1] != ' ')
                 {
                     lines.Add(cur.ToString());
                     cur.Clear().Append(' ', indent);
